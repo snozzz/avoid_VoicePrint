@@ -1,0 +1,53 @@
+# 数据集和预处理配置
+data:
+  # AutoDL公共数据集LibriSpeech dev-clean-100部分路径
+  dataset_path: "/root/autol-public/LibriSpeech/dev-clean-100" 
+  num_mels: 80           # Mel频谱的特征维度
+  sample_rate: 16000     # 采样率
+  win_length: 400        # 窗长 (25ms)
+  hop_length: 160        # 步长 (10ms)
+  n_fft: 512             # FFT点数
+  train_segment_sec: 3   # 训练时截取的音频片段长度（秒）
+  val_split_ratio: 0.1   # 从训练数据中划分10%作为验证集
+
+# 您的扰动算法配置
+perturbation:
+  enabled: true          # 是否启用扰动算法
+  strength: 0.005        # 扰动强度示例参数
+
+# 模型配置
+model:
+  input_dim: 80
+  num_heads: 4
+  ffn_dim: 512
+  num_layers: 6
+  depthwise_conv_kernel_size: 31
+  embedding_dim: 192     # 嵌入维度
+
+# 训练配置
+training:
+  device: "cuda"
+  batch_size: 192        # 24GB显存可以尝试这个值，如果OOM再适当调小
+  num_epochs: 150
+  learning_rate: 0.001
+  optimizer: "AdamW"
+  scheduler: "CosineAnnealingLR"
+  
+  # AAM-Softmax (ArcFace) 损失函数参数
+  loss:
+    margin: 0.2
+    scale: 30
+    
+  # LibriSpeech dev-clean-100 的说话人数量
+  num_speakers: 251
+
+# 硬件和性能配置
+hardware:
+  num_workers: 14        # 4090搭配的CPU核心数多，可以设置高一些
+  pin_memory: true
+  use_amp: true          # 在4090上务必开启自动混合精度训练
+
+# 日志和保存路径
+logging:
+  log_dir: "./logs"
+  checkpoint_dir: "./checkpoints"
