@@ -1,8 +1,10 @@
+# train.py
 import os
 import yaml
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader
+from torch.utils.data.dataloader import default_collate
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import numpy as np
@@ -11,15 +13,27 @@ from dataset import LibriSpeechSpeakerDataset
 from model import SpeakerNet
 from loss import AAMSoftmax
 
+def collate_fn(batch):
+    """
+    自定义 collate_fn，过滤掉值为 None 的样本。
+    这对于处理太短或损坏的音频文件是必需的。
+    """
+    batch = list(filter(lambda x: x is not None, batch))
+    if not batch:
+        # 如果整个批次都被过滤掉了，返回空的 tensor
+        return torch.tensor([]), torch.tensor([])
+    return default_collate(batch)
+
 def main(config):
     # --- 设置 ---
-    device = torch.device(config['training']['device'])
+    device = torch.device(config['training']['device'] if torch.cuda.is_available() else "cpu")
     log_dir = config['logging']['log_dir']
     checkpoint_dir = config['logging']['checkpoint_dir']
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(checkpoint_dir, exist_ok=True)
     
     writer = SummaryWriter(log_dir)
+    use_amp = config['hardware']['use_amp']
     
     # --- 数据加载 ---
     print("Loading datasets...")
@@ -28,43 +42,52 @@ def main(config):
     
     train_loader = DataLoader(
         train_dataset, batch_size=config['training']['batch_size'], shuffle=True,
-        num_workers=config['hardware']['num_workers'], pin_memory=config['hardware']['pin_memory'], drop_last=True
+        num_workers=config['hardware']['num_workers'], pin_memory=config['hardware']['pin_memory'], drop_last=True,
+        collate_fn=collate_fn
     )
     val_loader = DataLoader(
         val_dataset, batch_size=config['training']['batch_size'], shuffle=False,
-        num_workers=config['hardware']['num_workers'], pin_memory=config['hardware']['pin_memory']
+        num_workers=config['hardware']['num_workers'], pin_memory=config['hardware']['pin_memory'],
+        collate_fn=collate_fn
     )
     
     # --- 模型、损失函数、优化器 ---
     print("Initializing model...")
+    num_speakers = len(train_dataset.speaker_to_id)
     model = SpeakerNet(config).to(device)
-    loss_fn = AAMSoftmax(config).to(device)
+    # 将正确的说话人数量传递给损失函数
+    loss_fn = AAMSoftmax(config, num_classes=num_speakers).to(device)
     
+    # 将模型和损失函数的参数都交给优化器
     optimizer = optim.AdamW(
         list(model.parameters()) + list(loss_fn.parameters()),
         lr=config['training']['learning_rate']
     )
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config['training']['num_epochs'])
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.9)
     
-    use_amp = config['hardware']['use_amp']
-    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
-    
+    # 自动混合精度 (AMP)
+    scaler = torch.amp.GradScaler('cuda', enabled=use_amp)
+
+    # --- 训练循环 ---
+    print(f"Starting training on {device} with {num_speakers} speakers...")
     best_val_loss = float('inf')
     
-    # --- 训练循环 ---
-    print("Starting training...")
     for epoch in range(1, config['training']['num_epochs'] + 1):
         # --- 训练阶段 ---
         model.train()
         loss_fn.train()
-        train_loss = []
+        train_losses = []
         train_progress = tqdm(train_loader, desc=f"Epoch {epoch} [Train]")
         
         for mel_spec, speaker_id in train_progress:
+            # 跳过由 collate_fn 产生的空批次
+            if mel_spec.nelement() == 0:
+                continue
+            
             mel_spec, speaker_id = mel_spec.to(device), speaker_id.to(device)
             optimizer.zero_grad()
             
-            with torch.cuda.amp.autocast(enabled=use_amp):
+            with torch.amp.autocast('cuda', enabled=use_amp):
                 embedding = model(mel_spec)
                 loss = loss_fn(embedding, speaker_id)
             
@@ -72,39 +95,51 @@ def main(config):
             scaler.step(optimizer)
             scaler.update()
             
-            train_loss.append(loss.item())
-            train_progress.set_postfix(loss=np.mean(train_loss))
+            train_losses.append(loss.item())
+            train_progress.set_postfix(loss=np.mean(train_losses))
 
-        avg_train_loss = np.mean(train_loss)
+        avg_train_loss = np.mean(train_losses) if train_losses else 0.0
         writer.add_scalar('Loss/train', avg_train_loss, epoch)
-        writer.add_scalar('LearningRate', scheduler.get_last_lr()[0], epoch)
         
         # --- 验证阶段 ---
         model.eval()
         loss_fn.eval()
-        val_loss = []
+        val_losses = []
         val_progress = tqdm(val_loader, desc=f"Epoch {epoch} [Val]")
         with torch.no_grad():
             for mel_spec, speaker_id in val_progress:
+                # 跳过空批次
+                if mel_spec.nelement() == 0:
+                    continue
+                
                 mel_spec, speaker_id = mel_spec.to(device), speaker_id.to(device)
-                with torch.cuda.amp.autocast(enabled=use_amp):
+                with torch.amp.autocast('cuda', enabled=use_amp):
                     embedding = model(mel_spec)
                     loss = loss_fn(embedding, speaker_id)
-                val_loss.append(loss.item())
-                val_progress.set_postfix(loss=np.mean(val_loss))
+                
+                val_losses.append(loss.item())
+                val_progress.set_postfix(loss=np.mean(val_losses))
 
-        avg_val_loss = np.mean(val_loss)
-        writer.add_scalar('Loss/validation', avg_val_loss, epoch)
-        print(f"Epoch {epoch}: Train Loss = {avg_train_loss:.4f}, Val Loss = {avg_val_loss:.4f}")
-
-        scheduler.step()
+        avg_val_loss = np.mean(val_losses) if val_losses else 0.0
+        writer.add_scalar('Loss/val', avg_val_loss, epoch)
         
-        # --- 保存最佳模型 ---
+        print(f"Epoch {epoch}: Train Loss = {avg_train_loss:.4f}, Val Loss = {avg_val_loss:.4f}")
+        
+        # --- 保存检查点 ---
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
-            best_model_path = os.path.join(checkpoint_dir, "best_model.pt")
-            torch.save(model.state_dict(), best_model_path)
-            print(f"Validation loss improved. Saved best model to {best_model_path}")
+            checkpoint_path = os.path.join(checkpoint_dir, f"best_model.pt")
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss_fn_state_dict': loss_fn.state_dict(),
+                'val_loss': avg_val_loss,
+                'speaker_to_id': train_dataset.speaker_to_id
+            }, checkpoint_path)
+            print(f"Validation loss improved. Model saved to {checkpoint_path}")
+            
+        scheduler.step()
 
     writer.close()
     print("Training finished.")

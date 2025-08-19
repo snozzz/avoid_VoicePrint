@@ -1,53 +1,48 @@
-# 数据集和预处理配置
+# config.yaml
+
+# 1. 数据集参数
 data:
-  # AutoDL公共数据集LibriSpeech dev-clean-100部分路径
-  dataset_path: "../LibriSpeech/train-clean-100" 
-  num_mels: 80           # Mel频谱的特征维度
-  sample_rate: 16000     # 采样率
-  win_length: 400        # 窗长 (25ms)
-  hop_length: 160        # 步长 (10ms)
-  n_fft: 512             # FFT点数
-  train_segment_sec: 3   # 训练时截取的音频片段长度（秒）
-  val_split_ratio: 0.1   # 从训练数据中划分10%作为验证集
+  dataset_path: ../LibriSpeech/train-clean-100
+  val_split_ratio: 0.1
 
-# 您的扰动算法配置
-perturbation:
-  enabled: false          # 是否启用扰动算法
-  strength: 0.005        # 扰动强度示例参数
+# 2. 音频处理参数
+audio:
+  sample_rate: 16000
+  n_fft: 512
+  win_length: 400
+  hop_length: 160
+  n_mels: 80
+  segment_length_ms: 3000 # 截取3秒的片段进行训练
 
-# 模型配置
+# 3. 模型参数 (Conformer)
 model:
-  input_dim: 80
-  num_heads: 4
-  ffn_dim: 512
-  num_layers: 6
-  depthwise_conv_kernel_size: 31
-  embedding_dim: 192     # 嵌入维度
+  n_mels: 80 # 输入特征维度，应与 audio.n_mels 一致
+  embedding_dim: 192 # 输出的声纹嵌入维度
+  n_layers: 6 # Conformer 层数
+  n_heads: 4 # 多头注意力头数
+  d_model: 256 # 模型内部维度
+  ff_expansion_factor: 4 # 前馈网络扩展因子
+  dropout: 0.1
 
-# 训练配置
+# 4. 损失函数参数 (AAMSoftmax)
+loss:
+  margin: 0.2
+  scale: 30
+
+# 5. 训练参数
 training:
-  device: "cuda"
-  batch_size: 192        # 24GB显存可以尝试这个值，如果OOM再适当调小
-  num_epochs: 50
-  learning_rate: 0.001
-  optimizer: "AdamW"
-  scheduler: "CosineAnnealingLR"
-  
-  # AAM-Softmax (ArcFace) 损失函数参数
-  loss:
-    margin: 0.2
-    scale: 30
-    
-  # LibriSpeech dev-clean-100 的说话人数量
-  num_speakers: 251
+  batch_size: 64
+  num_epochs: 100
+  learning_rate: 0.0001
+  device: cuda # 使用 'cuda' 或 'cpu'
 
-# 硬件和性能配置
-hardware:
-  num_workers: 14        # 4090搭配的CPU核心数多，可以设置高一些
-  pin_memory: true
-  use_amp: true          # 在4090上务必开启自动混合精度训练
-
-# 日志和保存路径
+# 6. 日志与模型保存
 logging:
-  log_dir: "./logs"
-  checkpoint_dir: "./checkpoints"
+  log_dir: ./logs
+  checkpoint_dir: ./checkpoints
+
+# 7. 硬件与性能参数
+hardware:
+  num_workers: 12
+  pin_memory: true
+  use_amp: true # 是否使用自动混合精度训练 (Automatic Mixed Precision)
