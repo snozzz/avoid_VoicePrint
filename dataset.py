@@ -46,8 +46,8 @@ class LibriSpeechSpeakerDataset(Dataset):
         )
 
         # 5. 初始化扰动模块 (如果需要)
-        if self.train and self.apply_perturbation:
-            self.perturbation = Perturbation(config)
+        # if self.train and self.apply_perturbation:
+        #     self.perturbation = Perturbation(config)
 
     def _get_file_list_and_speaker_map(self):
         file_list = []
