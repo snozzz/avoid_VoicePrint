@@ -24,7 +24,7 @@ class Perturbation:
         self.surrogate_model = SpeakerNet(config).to(self.device)
         
         # 加载检查点
-        checkpoint_path = os.path.join(config['logging']['checkpoint_dir'], 'best_model.pt')
+        checkpoint_path = os.path.join(config['logging']['checkpoint_dir'], 'best_model_clean.pt')
         if not os.path.exists(checkpoint_path):
             raise FileNotFoundError(f"Checkpoint file not found at {checkpoint_path}. Please train a model on the clean dataset first.")
             

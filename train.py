@@ -138,7 +138,14 @@ def main(config):
         # --- 保存检查点 ---
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
-            checkpoint_path = os.path.join(checkpoint_dir, f"best_model.pt")
+
+            # 根据是否启用扰动，决定保存的文件名
+            if config.get('perturbation', {}).get('enabled', False):
+                model_filename = "best_model_perturbed.pt"
+            else:
+                model_filename = "best_model_clean.pt"
+
+            checkpoint_path = os.path.join(checkpoint_dir, model_filename)
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
