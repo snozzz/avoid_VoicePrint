@@ -8,6 +8,7 @@ from torch.utils.data.dataloader import default_collate
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import numpy as np
+import time
 
 from dataset import LibriSpeechSpeakerDataset
 from model import SpeakerNet
@@ -31,14 +32,23 @@ def main(config):
     checkpoint_dir = config['logging']['checkpoint_dir']
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(checkpoint_dir, exist_ok=True)
-    
-    writer = SummaryWriter(log_dir)
+
+    # 为当前运行创建一个带时间戳的独立日志目录
+    run_log_dir = os.path.join(log_dir, f"run_{int(time.time())}")
+    writer = SummaryWriter(run_log_dir)
+    print(f"TensorBoard logs for this run will be saved in: {run_log_dir}")
     use_amp = config['hardware']['use_amp']
     
     # --- 数据加载 ---
     print("Loading datasets...")
-    train_dataset = LibriSpeechSpeakerDataset(config, train=True)
-    val_dataset = LibriSpeechSpeakerDataset(config, train=False)
+    # 从配置中读取是否应用扰动的标志
+    apply_pert = config.get('perturbation', {}).get('enabled', False)
+    if apply_pert:
+        print("\n[!] Adversarial perturbation is ENABLED for the training set.\n")
+
+    train_dataset = LibriSpeechSpeakerDataset(config, train=True, apply_perturbation=apply_pert)
+    # 验证集永远不加扰动
+    val_dataset = LibriSpeechSpeakerDataset(config, train=False, apply_perturbation=False)
     
     train_loader = DataLoader(
         train_dataset, batch_size=config['training']['batch_size'], shuffle=True,

@@ -45,4 +45,11 @@ logging:
 hardware:
   num_workers: 12
   pin_memory: true
-  use_amp: true # 是否使用自动混合精度训练 (Automatic Mixed Precision)
+  use_amp: false # 是否使用自动混合精度训练 (Automatic Mixed Precision)
+
+perturbation:
+  enabled: true # 设置为 true 来在训练时启用扰动
+  surrogate_model_dir: "pretrained_models/spkrec-ecapa-tdnn" # 代理模型下载路径
+  epsilon: 0.002   # 扰动最大范数
+  alpha: 0.0002    # PGD 步长
+  num_iter: 50     # PGD 迭代次数
