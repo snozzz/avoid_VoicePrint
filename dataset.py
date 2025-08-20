@@ -8,11 +8,10 @@ from torch.utils.data import Dataset
 from perturb import Perturbation # 导入我们新的 Perturbation 类
 
 class LibriSpeechSpeakerDataset(Dataset):
-    def __init__(self, config, train=True, apply_perturbation=False):
+    def __init__(self, config, train=True):
         self.config = config
         self.data_path = config['data']['dataset_path']
         self.train = train
-        self.apply_perturbation = apply_perturbation
 
         # 1. 获取文件列表并构建 speaker-to-id 映射
         self.file_list, self.speaker_to_id = self._get_file_list_and_speaker_map()
@@ -35,18 +34,6 @@ class LibriSpeechSpeakerDataset(Dataset):
         self.sample_rate = config['audio']['sample_rate']
         self.segment_length_ms = config['audio']['segment_length_ms']
         self.segment_length_samples = int(self.sample_rate * self.segment_length_ms / 1000)
-
-        # 4. 在初始化时创建 Mel 频谱图转换器
-        self.mel_spectrogram_transform = torchaudio.transforms.MelSpectrogram(
-            sample_rate=self.sample_rate,
-            n_fft=config['audio']['n_fft'],
-            win_length=config['audio']['win_length'],
-            hop_length=config['audio']['hop_length'],
-            n_mels=config['audio']['n_mels']
-        )
-
-        # 5. 初始化扰动模块 (如果需要)
-        self.perturbation_module = None
 
     def _get_file_list_and_speaker_map(self):
         file_list = []
@@ -77,10 +64,6 @@ class LibriSpeechSpeakerDataset(Dataset):
         return len(self.file_list)
 
     def __getitem__(self, idx):
-        # 在 worker 进程中按需初始化扰动模块
-        if self.train and self.apply_perturbation and self.perturbation_module is None:
-            self.perturbation_module = Perturbation(self.config)
-            
         file_path, speaker_id = self.file_list[idx]
 
         try:
@@ -99,15 +82,7 @@ class LibriSpeechSpeakerDataset(Dataset):
             start_idx = random.randint(0, waveform.shape[1] - self.segment_length_samples)
             segment = waveform[:, start_idx : start_idx + self.segment_length_samples]
 
-            # 4. (可选) 应用扰动
-            if self.train and self.perturbation_module:
-                segment = self.perturbation_module(segment)
-
-            # 5. 提取 Mel 频谱图并转换为对数刻度
-            mel_spec = self.mel_spectrogram_transform(segment)
-            mel_spec = torch.log(mel_spec + 1e-9)
-
-            return mel_spec, speaker_id
+            return segment, speaker_id
 
         except Exception as e:
             print(f"Warning: Error loading or processing file {file_path}: {e}")

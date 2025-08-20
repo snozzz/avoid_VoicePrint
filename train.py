@@ -9,10 +9,12 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import numpy as np
 import time
+import torchaudio
 
 from dataset import LibriSpeechSpeakerDataset
 from model import SpeakerNet
 from loss import AAMSoftmax
+from perturb import Perturbation
 
 def collate_fn(batch):
     """
@@ -46,9 +48,9 @@ def main(config):
     if apply_pert:
         print("\n[!] Adversarial perturbation is ENABLED for the training set.\n")
 
-    train_dataset = LibriSpeechSpeakerDataset(config, train=True, apply_perturbation=apply_pert)
+    train_dataset = LibriSpeechSpeakerDataset(config, train=True)
     # 验证集永远不加扰动
-    val_dataset = LibriSpeechSpeakerDataset(config, train=False, apply_perturbation=False)
+    val_dataset = LibriSpeechSpeakerDataset(config, train=False)
     
     train_loader = DataLoader(
         train_dataset, batch_size=config['training']['batch_size'], shuffle=True,
@@ -60,6 +62,20 @@ def main(config):
         num_workers=config['hardware']['num_workers'], pin_memory=config['hardware']['pin_memory'],
         collate_fn=collate_fn
     )
+
+    # --- Mel频谱图转换器 ---
+    mel_spectrogram_transform = torchaudio.transforms.MelSpectrogram(
+        sample_rate=config['audio']['sample_rate'],
+        n_fft=config['audio']['n_fft'],
+        win_length=config['audio']['win_length'],
+        hop_length=config['audio']['hop_length'],
+        n_mels=config['audio']['n_mels']
+    ).to(device)
+
+    # --- 扰动模块（如果启用）---
+    perturbation_module = None
+    if apply_pert:
+        perturbation_module = Perturbation(config)
     
     # --- 模型、损失函数、优化器 ---
     print("Initializing model...")
@@ -89,12 +105,22 @@ def main(config):
         train_losses = []
         train_progress = tqdm(train_loader, desc=f"Epoch {epoch} [Train]")
         
-        for mel_spec, speaker_id in train_progress:
+        for segment, speaker_id in train_progress:
             # 跳过由 collate_fn 产生的空批次
-            if mel_spec.nelement() == 0:
+            if segment.nelement() == 0:
                 continue
             
-            mel_spec, speaker_id = mel_spec.to(device), speaker_id.to(device)
+            segment, speaker_id = segment.to(device), speaker_id.to(device)
+
+            # 应用扰动（如果启用）
+            if perturbation_module:
+                # 注意：PGD需要在GPU上运行以提高效率
+                segment = perturbation_module(segment)
+
+            # 提取 Mel 频谱图
+            mel_spec = mel_spectrogram_transform(segment)
+            mel_spec = torch.log(mel_spec + 1e-9)
+            
             optimizer.zero_grad()
             
             with torch.amp.autocast('cuda', enabled=use_amp):
@@ -117,12 +143,17 @@ def main(config):
         val_losses = []
         val_progress = tqdm(val_loader, desc=f"Epoch {epoch} [Val]")
         with torch.no_grad():
-            for mel_spec, speaker_id in val_progress:
+            for segment, speaker_id in val_progress:
                 # 跳过空批次
-                if mel_spec.nelement() == 0:
+                if segment.nelement() == 0:
                     continue
                 
-                mel_spec, speaker_id = mel_spec.to(device), speaker_id.to(device)
+                segment, speaker_id = segment.to(device), speaker_id.to(device)
+
+                # 提取 Mel 频谱图
+                mel_spec = mel_spectrogram_transform(segment)
+                mel_spec = torch.log(mel_spec + 1e-9)
+
                 with torch.amp.autocast('cuda', enabled=use_amp):
                     embedding = model(mel_spec)
                     loss = loss_fn(embedding, speaker_id)
