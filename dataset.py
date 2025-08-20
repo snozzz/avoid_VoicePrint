@@ -5,7 +5,7 @@ import glob
 import torch
 import torchaudio
 from torch.utils.data import Dataset
-# from perturb import Perturbation # 保留，为后续做准备
+from perturb import Perturbation # 导入我们新的 Perturbation 类
 
 class LibriSpeechSpeakerDataset(Dataset):
     def __init__(self, config, train=True, apply_perturbation=False):
@@ -46,8 +46,9 @@ class LibriSpeechSpeakerDataset(Dataset):
         )
 
         # 5. 初始化扰动模块 (如果需要)
-        # if self.train and self.apply_perturbation:
-        #     self.perturbation = Perturbation(config)
+        self.perturbation_module = None
+        if self.train and self.apply_perturbation:
+            self.perturbation_module = Perturbation(config)
 
     def _get_file_list_and_speaker_map(self):
         file_list = []
@@ -97,8 +98,8 @@ class LibriSpeechSpeakerDataset(Dataset):
             segment = waveform[:, start_idx : start_idx + self.segment_length_samples]
 
             # 4. (可选) 应用扰动
-            if self.train and self.apply_perturbation:
-                segment = self.perturbation(segment)
+            if self.train and self.perturbation_module:
+                segment = self.perturbation_module(segment)
 
             # 5. 提取 Mel 频谱图并转换为对数刻度
             mel_spec = self.mel_spectrogram_transform(segment)
