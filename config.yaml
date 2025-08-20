@@ -2,7 +2,8 @@
 
 # 1. 数据集参数
 data:
-  dataset_path: /root/autodl-tmp/LibriSpeech/train-clean-100
+  # dataset_path: /root/autodl-tmp/LibriSpeech/train-clean-100
+  dataset_path: ../LibriSpeech/train-clean-100
   val_split_ratio: 0.1
 
 # 2. 音频处理参数
