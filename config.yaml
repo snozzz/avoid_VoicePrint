@@ -2,7 +2,7 @@
 
 # 1. 数据集参数
 data:
-  dataset_path: ../LibriSpeech/train-clean-100
+  dataset_path: /root/autodl-tmp/LibriSpeech/train-clean-100
   val_split_ratio: 0.1
 
 # 2. 音频处理参数
@@ -45,6 +45,7 @@ logging:
 hardware:
   num_workers: 12
   pin_memory: true
+<<<<<<< Updated upstream
   use_amp: false # 是否使用自动混合精度训练 (Automatic Mixed Precision)
 
 perturbation:
@@ -53,3 +54,6 @@ perturbation:
   epsilon: 0.002   # 扰动最大范数
   alpha: 0.0002    # PGD 步长
   num_iter: 50     # PGD 迭代次数
+=======
+  use_amp: true # 是否使用自动混合精度训练 (Automatic Mixed Precision)
+>>>>>>> Stashed changes
