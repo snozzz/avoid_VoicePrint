@@ -40,7 +40,7 @@ class Perturbation:
             win_length=audio_config['win_length'],
             hop_length=audio_config['hop_length'],
             n_mels=audio_config['n_mels']
-        ).to(self.device)
+        )
 
         # 3. PGD 攻击参数
         self.epsilon = pert_config['epsilon']
@@ -51,7 +51,8 @@ class Perturbation:
 
     def to_mel_spec(self, waveform):
         """Helper function to convert waveform to log-mel-spectrogram."""
-        mel_spec = self.mel_transform(waveform)
+        # Ensure the transform is on the same device as the waveform
+        mel_spec = self.mel_transform.to(waveform.device)(waveform)
         return torch.log(mel_spec + 1e-9)
 
     def __call__(self, waveform: torch.Tensor) -> torch.Tensor:

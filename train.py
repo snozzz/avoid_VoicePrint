@@ -162,6 +162,7 @@ def main(config):
     print("Training finished.")
 
 if __name__ == "__main__":
+    torch.multiprocessing.set_start_method('spawn')
     with open('config.yaml', 'r') as f:
         config = yaml.safe_load(f)
     main(config)

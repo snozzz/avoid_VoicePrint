@@ -79,6 +79,10 @@ class LibriSpeechSpeakerDataset(Dataset):
         return len(self.file_list)
 
     def __getitem__(self, idx):
+        # 在 worker 进程中按需初始化扰动模块
+        if self.train and self.apply_perturbation and self.perturbation_module is None:
+            self.perturbation_module = Perturbation(self.config)
+            
         file_path, speaker_id = self.file_list[idx]
 
         try:
@@ -108,5 +112,5 @@ class LibriSpeechSpeakerDataset(Dataset):
             return mel_spec, speaker_id
 
         except Exception as e:
-            # print(f"Warning: Error loading or processing file {file_path}: {e}")
+            print(f"Warning: Error loading or processing file {file_path}: {e}")
             return None
