@@ -49,8 +49,10 @@ hardware:
   use_amp: true # 是否使用自动混合精度训练 (Automatic Mixed Precision)
 
 perturbation:
-  enabled: true # 设置为 true 来在训练时启用扰动
-  # surrogate_model_dir: "pretrained_models/spkrec-ecapa-tdnn" # 代理模型下载路径
-  epsilon: 0.002   # 扰动最大范数
-  alpha: 0.0002    # PGD 步长
-  num_iter: 50     # PGD 迭代次数
+  enabled: true
+  epsilon: 0.005
+  num_iter: 20
+  lr: 0.001
+  alpha: 1.0  # Weight for the unlearnable loss (L_arc)
+  beta: 0.005 # Weight for the STFT loss
+  gamma: 0.01 # Weight for the STOI loss

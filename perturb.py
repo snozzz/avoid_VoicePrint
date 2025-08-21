@@ -2,104 +2,137 @@ import torch
 import torchaudio
 import os
 import yaml
+from speechbrain.inference.classifiers import EncoderClassifier
+from torch_stoi import NegSTOILoss
 
-# 导入我们自己的模型定义
-from model import SpeakerNet
+class STFTLoss(torch.nn.Module):
+    """
+    STFT Loss module.
+    Calculates the L2 distance between the Short-Time Fourier Transform
+    of the original and perturbed audio signals.
+    """
+    def __init__(self, fft_size=1024, hop_size=256, win_length=1024):
+        super().__init__()
+        self.fft_size = fft_size
+        self.hop_size = hop_size
+        self.win_length = win_length
+
+    def forward(self, x_perturbed, x_original):
+        """
+        Args:
+            x_perturbed (Tensor): The perturbed audio signal (Batch, Time).
+            x_original (Tensor): The original audio signal (Batch, Time).
+        Returns:
+            Tensor: The STFT loss value.
+        """
+        stft_original = torch.stft(x_original,
+                                   n_fft=self.fft_size,
+                                   hop_length=self.hop_size,
+                                   win_length=self.win_length,
+                                   window=torch.hann_window(self.win_length, device=x_original.device),
+                                   return_complex=False)
+
+        stft_perturbed = torch.stft(x_perturbed,
+                                    n_fft=self.fft_size,
+                                    hop_length=self.hop_size,
+                                    win_length=self.win_length,
+                                    window=torch.hann_window(self.win_length, device=x_perturbed.device),
+                                    return_complex=False)
+
+        # Calculate L2 norm (Frobenius norm for matrices) on the magnitude
+        return torch.linalg.norm(stft_original - stft_perturbed, 'fro')
+
 
 class Perturbation:
     def __init__(self, config):
         """
-        初始化扰动生成器。
-        这个类现在会加载一个我们自己训练的 SpeakerNet 模型作为代理模型。
+        Initializes the perturbation generator based on the HiddenSpeaker method.
         """
         pert_config = config['perturbation']
-        audio_config = config['audio']
         self.device = torch.device(config['training']['device'] if torch.cuda.is_available() else "cpu")
-        
-        print("\n" + "="*50)
-        print("Initializing Perturbation Module (Self-Adversarial Mode)...")
-        
-        # 1. 加载我们自己的 SpeakerNet 模型作为代理模型
-        print("Loading our own SpeakerNet as the surrogate model...")
-        self.surrogate_model = SpeakerNet(config).to(self.device)
-        
-        # 加载检查点
-        checkpoint_path = os.path.join(config['logging']['checkpoint_dir'], 'best_model_clean.pt')
-        if not os.path.exists(checkpoint_path):
-            raise FileNotFoundError(f"Checkpoint file not found at {checkpoint_path}. Please train a model on the clean dataset first.")
-            
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
-        self.surrogate_model.load_state_dict(checkpoint['model_state_dict'])
-        self.surrogate_model.eval()
-        print(f"Surrogate model loaded from {checkpoint_path}.")
-        
-        # 2. 初始化 Mel 频谱图转换器，因为我们的模型需要它
-        self.mel_transform = torchaudio.transforms.MelSpectrogram(
-            sample_rate=audio_config['sample_rate'],
-            n_fft=audio_config['n_fft'],
-            win_length=audio_config['win_length'],
-            hop_length=audio_config['hop_length'],
-            n_mels=audio_config['n_mels']
-        )
 
-        # 3. PGD 攻击参数
+        print("\n" + "="*50)
+        print("Initializing Perturbation Module (HiddenSpeaker Method)...")
+
+        # 1. Load pre-trained ECAPA-TDNN model from SpeechBrain
+        print("Loading pre-trained ECAPA-TDNN model from SpeechBrain...")
+        self.surrogate_model = EncoderClassifier.from_hparams(
+            source="speechbrain/spkrec-ecapa-voxceleb",
+            savedir=os.path.join("/tmp", "pretrained_models_sb") # Cache directory
+        ).to(self.device)
+        self.surrogate_model.eval()
+        print("Surrogate model loaded.")
+
+        # 2. PGD Attack Parameters
         self.epsilon = pert_config['epsilon']
-        self.alpha = pert_config['alpha']
         self.num_iter = pert_config['num_iter']
-        print(f"PGD params: epsilon={self.epsilon}, alpha={self.alpha}, num_iter={self.num_iter}")
+        self.learning_rate = pert_config['lr']
+        self.alpha = pert_config['alpha'] # Weight for unlearnable loss
+        self.beta = pert_config['beta']   # Weight for STFT loss
+        self.gamma = pert_config['gamma'] # Weight for STOI loss
+        self.target_sample_rate = config['audio']['sample_rate']
+
+        print(f"Params: epsilon={self.epsilon}, num_iter={self.num_iter}, lr={self.learning_rate}")
+        print(f"Loss weights: alpha={self.alpha}, beta={self.beta}, gamma={self.gamma}")
+
+        # 3. Instantiate Loss Functions
+        self.cosine_similarity_loss = torch.nn.CosineSimilarity(dim=1)
+        self.stft_loss_fn = STFTLoss().to(self.device)
+        self.stoi_loss_fn = NegSTOILoss(sample_rate=self.target_sample_rate).to(self.device)
         print("="*50 + "\n")
 
-    def to_mel_spec(self, waveform):
-        """Helper function to convert waveform to log-mel-spectrogram."""
-        # Ensure the transform is on the same device as the waveform
-        mel_spec = self.mel_transform.to(waveform.device)(waveform)
-        return torch.log(mel_spec + 1e-9)
 
     def __call__(self, waveform: torch.Tensor) -> torch.Tensor:
         """
-        对输入的音频波形应用PGD扰动。
-        :param waveform: 输入的音频波形张量，形状为 (1, 采样点数)
-        :return: 经过扰动后的音频波形张量
+        Applies HiddenSpeaker perturbation to the input audio waveform.
+        :param waveform: Input audio waveform tensor, shape (Batch, Time)
+        :return: Perturbed audio waveform tensor
         """
         waveform = waveform.to(self.device)
-        waveform.requires_grad = False # Ensure original waveform does not require grad
+        waveform.requires_grad = False
 
-        # 1. 计算原始声纹嵌入作为目标"锚点"
-        with torch.no_grad():
-            original_spec = self.to_mel_spec(waveform)
-            original_embedding = self.surrogate_model(original_spec).detach()
-        
-        # 2. 初始化扰动 delta
+        # Initialize perturbation delta
         delta = torch.zeros_like(waveform, requires_grad=True)
-        
-        # 3. PGD 迭代
+        optimizer = torch.optim.Adam([delta], lr=self.learning_rate)
+
+        # Calculate the original embedding as the target
+        with torch.no_grad():
+            target_embedding = self.surrogate_model.encode_batch(waveform)
+
+        # Iterative optimization loop
         for _ in range(self.num_iter):
-            perturbed_audio = waveform + delta
-            
-            # 将扰动后的音频转换为频谱图以输入模型
-            perturbed_spec = self.to_mel_spec(perturbed_audio)
-            perturbed_embedding = self.surrogate_model(perturbed_spec)
-            
-            # 损失函数：最小化负的余弦相似度（即最大化差异）
-            loss = -torch.nn.functional.cosine_similarity(perturbed_embedding, original_embedding).mean()
-            
-            # 反向传播计算梯度 (梯度会从模型->频谱图->一直传到 delta)
-            loss.backward()
-            
-            with torch.no_grad():
-                # 获取梯度符号
-                grad_sign = delta.grad.data.sign()
-                # 更新 delta
-                delta.data = delta.data - self.alpha * grad_sign
-                # 投影: 保证扰动大小在 epsilon 范围内
-                delta.data = torch.clamp(delta.data, -self.epsilon, self.epsilon)
-                # 保证添加扰动后的音频值在有效范围内 [-1, 1]
-                clamped_perturbed_audio = torch.clamp(waveform + delta.data, -1.0, 1.0)
-                # 更新 delta 以反映对音频的裁剪
-                delta.data = clamped_perturbed_audio - waveform.data
+            optimizer.zero_grad()
 
-            # 清除梯度
-            delta.grad.data.zero_()
+            # Add perturbation and clamp to valid audio range [-1, 1]
+            perturbed_audio = torch.clamp(waveform + delta, -1.0, 1.0)
 
-        # 返回在原始设备上的扰动后音频
-        return (waveform + delta).detach().to(waveform.device)
+            # --- Calculate Hybrid Loss ---
+            # a) "Unlearnable" Loss
+            perturbed_embedding = self.surrogate_model.encode_batch(perturbed_audio)
+            loss_arc_sim = 1.0 - self.cosine_similarity_loss(perturbed_embedding, target_embedding).mean()
+
+            # b) STFT Loss
+            loss_stft = self.stft_loss_fn(perturbed_audio.squeeze(0), waveform.squeeze(0))
+
+            # c) STOI Loss
+            loss_stoi = self.stoi_loss_fn(perturbed_audio, waveform)
+
+            # d) Total Hybrid Loss
+            total_loss = (self.alpha * loss_arc_sim +
+                          self.beta * loss_stft +
+                          self.gamma * loss_stoi)
+
+            # Backpropagate and update perturbation
+            total_loss.backward()
+            optimizer.step()
+
+            # Project perturbation back to the epsilon-ball (L-infinity norm)
+            delta.data = torch.clamp(delta.data, -self.epsilon, self.epsilon)
+            
+            # Ensure the perturbed audio remains in the valid range
+            clamped_perturbed_audio = torch.clamp(waveform + delta.data, -1.0, 1.0)
+            delta.data = clamped_perturbed_audio - waveform.data
+
+
+        # Return the perturbed audio on the original device
+        return (waveform + delta).detach()
