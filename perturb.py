@@ -85,26 +85,30 @@ class Perturbation:
     def __call__(self, waveform: torch.Tensor) -> torch.Tensor:
         """
         Applies HiddenSpeaker perturbation to the input audio waveform.
-        :param waveform: Input audio waveform tensor, shape (Batch, Time)
+        :param waveform: Input audio waveform tensor, shape (Batch, 1, Time)
         :return: Perturbed audio waveform tensor
         """
         waveform = waveform.to(self.device)
-        waveform.requires_grad = False
+        
+        # The input waveform has shape (Batch, 1, Time).
+        # The speechbrain model expects (Batch, Time).
+        squeezed_waveform = waveform.squeeze(1)
+        squeezed_waveform.requires_grad = False
 
-        # Initialize perturbation delta
-        delta = torch.zeros_like(waveform, requires_grad=True)
+        # Initialize perturbation delta for the squeezed waveform
+        delta = torch.zeros_like(squeezed_waveform, requires_grad=True)
         optimizer = torch.optim.Adam([delta], lr=self.learning_rate)
 
         # Calculate the original embedding as the target
         with torch.no_grad():
-            target_embedding = self.surrogate_model.encode_batch(waveform)
+            target_embedding = self.surrogate_model.encode_batch(squeezed_waveform)
 
         # Iterative optimization loop
         for _ in range(self.num_iter):
             optimizer.zero_grad()
 
             # Add perturbation and clamp to valid audio range [-1, 1]
-            perturbed_audio = torch.clamp(waveform + delta, -1.0, 1.0)
+            perturbed_audio = torch.clamp(squeezed_waveform + delta, -1.0, 1.0)
 
             # --- Calculate Hybrid Loss ---
             # a) "Unlearnable" Loss
@@ -112,10 +116,10 @@ class Perturbation:
             loss_arc_sim = 1.0 - self.cosine_similarity_loss(perturbed_embedding, target_embedding).mean()
 
             # b) STFT Loss
-            loss_stft = self.stft_loss_fn(perturbed_audio.squeeze(0), waveform.squeeze(0))
+            loss_stft = self.stft_loss_fn(perturbed_audio, squeezed_waveform)
 
             # c) STOI Loss
-            loss_stoi = self.stoi_loss_fn(perturbed_audio, waveform)
+            loss_stoi = self.stoi_loss_fn(perturbed_audio, squeezed_waveform)
 
             # d) Total Hybrid Loss
             total_loss = (self.alpha * loss_arc_sim +
@@ -130,9 +134,8 @@ class Perturbation:
             delta.data = torch.clamp(delta.data, -self.epsilon, self.epsilon)
             
             # Ensure the perturbed audio remains in the valid range
-            clamped_perturbed_audio = torch.clamp(waveform + delta.data, -1.0, 1.0)
-            delta.data = clamped_perturbed_audio - waveform.data
+            clamped_perturbed_audio = torch.clamp(squeezed_waveform + delta.data, -1.0, 1.0)
+            delta.data = clamped_perturbed_audio - squeezed_waveform.data
 
-
-        # Return the perturbed audio on the original device
-        return (waveform + delta).detach()
+        # Return the perturbed audio on the original device, adding the channel dimension back
+        return (squeezed_waveform + delta).detach().unsqueeze(1)
