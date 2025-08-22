@@ -57,7 +57,7 @@ class Perturbation:
         # 1. Load pre-trained ECAPA-TDNN model from SpeechBrain
         print("Loading pre-trained ECAPA-TDNN model from SpeechBrain...")
         self.surrogate_model = EncoderClassifier.from_hparams(
-            source="speechbrain/spkrec-ecapa-voxceleb",
+            source="speechbrain/spkrec-xvect-voxceleb",
             savedir=os.path.join("/tmp", "pretrained_models_sb") # Cache directory
         ).to(self.device)
         self.surrogate_model.eval()

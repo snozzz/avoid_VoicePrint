@@ -153,7 +153,7 @@ def main():
     print("Loading pre-trained ECAPA-TDNN model from SpeechBrain...")
     # This will download the model automatically on the first run
     model = EncoderClassifier.from_hparams(
-        source="speechbrain/spkrec-ecapa-voxceleb",
+        source="speechbrain/spkrec-xvect-voxceleb",
         savedir=os.path.join("/tmp", "pretrained_models_sb") # Cache directory
     ).to(device)
     model.eval()
