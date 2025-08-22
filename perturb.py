@@ -40,7 +40,7 @@ class STFTLoss(torch.nn.Module):
                                     return_complex=False)
 
         # Calculate L2 norm (Frobenius norm for matrices) on the magnitude
-        return torch.linalg.norm(stft_original - stft_perturbed, 'fro')
+        return torch.linalg.norm(stft_original - stft_perturbed)
 
 
 class Perturbation:
