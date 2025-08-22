@@ -119,7 +119,7 @@ class Perturbation:
             loss_stft = self.stft_loss_fn(perturbed_audio, squeezed_waveform)
 
             # c) STOI Loss
-            loss_stoi = self.stoi_loss_fn(perturbed_audio, squeezed_waveform)
+            loss_stoi = self.stoi_loss_fn(perturbed_audio, squeezed_waveform).mean()
 
             # d) Total Hybrid Loss
             total_loss = (self.alpha * loss_arc_sim +
